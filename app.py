@@ -80,13 +80,13 @@ def create_license():
     expires_in = payload.get("expires_in")  # số ngày
 
     if not isinstance(quantity, int) or quantity <= 0:
-        return jsonify({"error": "quantity phải là số nguyên dương"}), 400
+        return jsonify({"status": False, "error": "quantity phải là số nguyên dương"}), 400
     if not isinstance(expires_in, int) or expires_in <= 0:
-        return jsonify({"error": "expires_in phải là số nguyên dương"}), 400
+        return jsonify({"status": False, "error": "expires_in phải là số nguyên dương"}), 400
 
     # tránh tạo quá nhiều một lúc
     if quantity > 1000:
-        return jsonify({"error": "quantity tối đa 1000"}), 400
+        return jsonify({"status": False, "error": "quantity tối đa 1000"}), 400
 
     expires_ts = int((datetime.now(timezone.utc) + timedelta(days=expires_in)).timestamp())
 
@@ -105,7 +105,7 @@ def create_license():
             seen.add(c)
         _save_licenses(licenses)
 
-    return jsonify(created_items), 201
+    return jsonify({"status": True, "data": created_items}), 201
 
 
 @app.post("/verify")
@@ -113,23 +113,89 @@ def verify_license():
     payload = request.get_json(silent=True) or {}
     code = payload.get("code")
     if not code:
-        return jsonify({"error": "code là bắt buộc"}), 400
+        return jsonify({"status": False, "error": "code là bắt buộc"}), 400
 
     with _lock:
         licenses = _load_licenses()
 
     lic = next((l for l in licenses if l.get("code") == code), None)
     if lic is None:
-        return jsonify({"valid": False, "reason": "not_found"}), 404
+        return jsonify({"status": False, "valid": False, "reason": "not_found"}), 404
 
     exp_ts = _parse_expired_at_to_ts(lic.get("expired_at"))
     if exp_ts is None:
-        return jsonify({"valid": False, "reason": "invalid_expired_at"}), 500
+        return jsonify({"status": False, "valid": False, "reason": "invalid_expired_at"}), 500
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     is_valid = now_ts <= exp_ts
-    status = 200 if is_valid else 410
-    return jsonify({"valid": is_valid, "expired_at": exp_ts}), status
+    status_code = 200 if is_valid else 410
+    return jsonify({"status": True, "valid": is_valid, "expired_at": exp_ts}), status_code
+
+
+@app.get("/list")
+def list_licenses():
+    """Lấy danh sách tất cả các license code"""
+    with _lock:
+        licenses = _load_licenses()
+    
+    return jsonify({"status": True, "data": licenses}), 200
+
+
+@app.put("/update")
+def update_license():
+    """Cập nhật thời hạn của license code(s)"""
+    payload = request.get_json(silent=True) or {}
+    code = payload.get("code")
+    expires_in = payload.get("expires_in")
+    
+    if not code:
+        return jsonify({"status": False, "error": "code là bắt buộc"}), 400
+    if not isinstance(expires_in, int) or expires_in <= 0:
+        return jsonify({"status": False, "error": "expires_in phải là số nguyên dương"}), 400
+    
+    # Chuyển code thành list nếu là string đơn
+    if isinstance(code, str):
+        codes_to_update = [code]
+    elif isinstance(code, list):
+        codes_to_update = code
+    else:
+        return jsonify({"status": False, "error": "code phải là string hoặc array"}), 400
+    
+    if not codes_to_update:
+        return jsonify({"status": False, "error": "code không được rỗng"}), 400
+    
+    expires_ts = int((datetime.now(timezone.utc) + timedelta(days=expires_in)).timestamp())
+    
+    with _lock:
+        licenses = _load_licenses()
+        codes_set = set(codes_to_update)
+        updated_count = 0
+        not_found_codes = []
+        
+        for lic in licenses:
+            if lic.get("code") in codes_set:
+                lic["expired_at"] = expires_ts
+                updated_count += 1
+                codes_set.remove(lic.get("code"))
+        
+        not_found_codes = list(codes_set)
+        
+        if updated_count == 0:
+            return jsonify({"status": False, "error": "không tìm thấy code nào để cập nhật"}), 404
+        
+        _save_licenses(licenses)
+    
+    result = {
+        "status": True,
+        "message": "updated",
+        "updated_count": updated_count,
+        "expired_at": expires_ts
+    }
+    
+    if not_found_codes:
+        result["not_found_codes"] = not_found_codes
+    
+    return jsonify(result), 200
 
 
 @app.delete("/delete")
@@ -137,16 +203,27 @@ def delete_license():
     payload = request.get_json(silent=True) or {}
     code = payload.get("code")
     if not code:
-        return jsonify({"error": "code là bắt buộc"}), 400
+        return jsonify({"status": False, "error": "code là bắt buộc"}), 400
 
     with _lock:
         licenses = _load_licenses()
         new_list = [l for l in licenses if l.get("code") != code]
         if len(new_list) == len(licenses):
-            return jsonify({"error": "code không tồn tại"}), 404
+            return jsonify({"status": False, "error": "code không tồn tại"}), 404
         _save_licenses(new_list)
 
-    return jsonify({"message": "deleted"}), 200
+    return jsonify({"status": True, "message": "deleted"}), 200
+
+
+@app.delete("/delete-all")
+def delete_all_licenses():
+    """Xóa tất cả license code"""
+    with _lock:
+        licenses = _load_licenses()
+        deleted_count = len(licenses)
+        _save_licenses([])
+    
+    return jsonify({"status": True, "message": "deleted_all", "deleted_count": deleted_count}), 200
 
 
 if __name__ == "__main__":
