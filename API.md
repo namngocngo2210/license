@@ -2,7 +2,7 @@
 
 ## Tổng quan
 
-API quản lý license code cho phép tạo, xác thực, cập nhật, xóa và liệt kê các license code. Mỗi license code có thời hạn sử dụng được quản lý bằng Unix timestamp.
+API quản lý license code cho phép tạo, xác thực, cập nhật, xóa và liệt kê các license code. Mỗi license code được gắn với một số điện thoại và có thời hạn sử dụng được quản lý bằng Unix timestamp. Việc xác thực license yêu cầu cả code và số điện thoại phải khớp.
 
 **Base URL:** `http://localhost:5000`
 
@@ -18,20 +18,20 @@ Tất cả các response đều có field `status`:
 
 ### 1. Tạo License Code
 
-Tạo một hoặc nhiều license code mới.
+Tạo license code cho danh sách số điện thoại. Mỗi số điện thoại sẽ được gán một license code duy nhất.
 
 **Endpoint:** `POST /create`
 
 **Request Body:**
 ```json
 {
-  "quantity": 5,
+  "phone_numbers": ["0123456789", "0987654321", "0912345678"],
   "expires_in": 30
 }
 ```
 
 **Parameters:**
-- `quantity` (integer, required): Số lượng license code cần tạo (1-1000)
+- `phone_numbers` (array, required): Mảng các số điện thoại cần tạo license (tối đa 1000 số)
 - `expires_in` (integer, required): Thời hạn sử dụng tính bằng ngày
 
 **Response Success (201):**
@@ -41,10 +41,12 @@ Tạo một hoặc nhiều license code mới.
   "data": [
     {
       "code": "550e8400-e29b-41d4-a716-446655440000",
+      "phone_number": "0123456789",
       "expired_at": 1735689600
     },
     {
       "code": "550e8400-e29b-41d4-a716-446655440001",
+      "phone_number": "0987654321",
       "expired_at": 1735689600
     }
   ]
@@ -55,31 +57,39 @@ Tạo một hoặc nhiều license code mới.
 ```json
 {
   "status": false,
-  "error": "quantity phải là số nguyên dương"
+  "error": "phone_numbers phải là mảng không rỗng"
 }
 ```
 
 **Lỗi có thể xảy ra:**
-- `400`: `quantity` hoặc `expires_in` không hợp lệ
-- `400`: `quantity` vượt quá 1000
+- `400`: `phone_numbers` không phải mảng hoặc mảng rỗng
+- `400`: `expires_in` không phải số nguyên dương
+- `400`: `phone_numbers` vượt quá 1000 số
+- `400`: Có số điện thoại không hợp lệ (rỗng hoặc không phải chuỗi)
+
+**Lưu ý:** 
+- Số điện thoại đã tồn tại trong hệ thống sẽ được bỏ qua (không tạo license mới)
+- Mỗi số điện thoại chỉ có thể có một license code duy nhất
 
 ---
 
 ### 2. Xác thực License Code
 
-Kiểm tra tính hợp lệ của một license code.
+Kiểm tra tính hợp lệ của một license code. Yêu cầu cả code và số điện thoại phải khớp.
 
 **Endpoint:** `POST /verify`
 
 **Request Body:**
 ```json
 {
-  "code": "550e8400-e29b-41d4-a716-446655440000"
+  "code": "550e8400-e29b-41d4-a716-446655440000",
+  "phone_number": "0123456789"
 }
 ```
 
 **Parameters:**
 - `code` (string, required): License code cần xác thực
+- `phone_number` (string, required): Số điện thoại gắn với license code
 
 **Response Success - License hợp lệ (200):**
 ```json
@@ -107,6 +117,14 @@ Kiểm tra tính hợp lệ của một license code.
 }
 ```
 
+Hoặc:
+```json
+{
+  "status": false,
+  "error": "phone_number là bắt buộc"
+}
+```
+
 **Response Error (404):**
 ```json
 {
@@ -126,9 +144,11 @@ Kiểm tra tính hợp lệ của một license code.
 ```
 
 **Lỗi có thể xảy ra:**
-- `400`: Thiếu field `code`
-- `404`: License code không tồn tại
+- `400`: Thiếu field `code` hoặc `phone_number`
+- `404`: Không tìm thấy license với code và phone_number khớp
 - `500`: Dữ liệu `expired_at` không hợp lệ
+
+**Lưu ý:** License chỉ được xác thực thành công khi cả `code` và `phone_number` đều khớp với dữ liệu trong hệ thống.
 
 ---
 
@@ -147,10 +167,12 @@ Lấy danh sách tất cả các license code đã được tạo.
   "data": [
     {
       "code": "550e8400-e29b-41d4-a716-446655440000",
+      "phone_number": "0123456789",
       "expired_at": 1735689600
     },
     {
       "code": "550e8400-e29b-41d4-a716-446655440001",
+      "phone_number": "0987654321",
       "expired_at": 1735689600
     }
   ]
@@ -312,12 +334,12 @@ Xóa toàn bộ license code khỏi hệ thống.
 
 ## Ví dụ sử dụng
 
-### Tạo 10 license code với thời hạn 30 ngày
+### Tạo license code cho danh sách số điện thoại với thời hạn 30 ngày
 ```bash
 curl -X POST http://localhost:5000/create \
   -H "Content-Type: application/json" \
   -d '{
-    "quantity": 10,
+    "phone_numbers": ["0123456789", "0987654321", "0912345678"],
     "expires_in": 30
   }'
 ```
@@ -327,7 +349,8 @@ curl -X POST http://localhost:5000/create \
 curl -X POST http://localhost:5000/verify \
   -H "Content-Type: application/json" \
   -d '{
-    "code": "550e8400-e29b-41d4-a716-446655440000"
+    "code": "550e8400-e29b-41d4-a716-446655440000",
+    "phone_number": "0123456789"
   }'
 ```
 
@@ -364,11 +387,20 @@ curl -X DELETE http://localhost:5000/delete-all
 
 1. **License Code Format:** License code được tạo dưới dạng UUID v4 (ví dụ: `550e8400-e29b-41d4-a716-446655440000`)
 
-2. **Thời hạn (expired_at):** Được lưu dưới dạng Unix timestamp (số giây kể từ 1/1/1970 UTC)
+2. **Số điện thoại:** Mỗi license code được gắn với một số điện thoại duy nhất. Mỗi số điện thoại chỉ có thể có một license code.
 
-3. **Thread Safety:** Tất cả các thao tác đều được bảo vệ bằng lock để đảm bảo thread-safe
+3. **Cấu trúc dữ liệu:** Mỗi license bao gồm:
+   - `code`: License code (UUID v4)
+   - `phone_number`: Số điện thoại gắn với license
+   - `expired_at`: Thời hạn sử dụng (Unix timestamp)
 
-4. **Dữ liệu lưu trữ:** License được lưu trong file `license.json` trong cùng thư mục với ứng dụng
+4. **Thời hạn (expired_at):** Được lưu dưới dạng Unix timestamp (số giây kể từ 1/1/1970 UTC)
 
-5. **Giới hạn:** Mỗi lần tạo tối đa 1000 license code
+5. **Thread Safety:** Tất cả các thao tác đều được bảo vệ bằng lock để đảm bảo thread-safe
+
+6. **Dữ liệu lưu trữ:** License được lưu trong file `license.json` trong cùng thư mục với ứng dụng
+
+7. **Giới hạn:** Mỗi lần tạo tối đa 1000 license code (tương ứng với 1000 số điện thoại)
+
+8. **Xác thực:** Việc xác thực license yêu cầu cả `code` và `phone_number` phải khớp với dữ liệu trong hệ thống
 

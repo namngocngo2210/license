@@ -76,33 +76,54 @@ def _generate_codes(count):
 @app.post("/create")
 def create_license():
     payload = request.get_json(silent=True) or {}
-    quantity = payload.get("quantity")
+    phone_numbers = payload.get("phone_numbers")
     expires_in = payload.get("expires_in")  # số ngày
 
-    if not isinstance(quantity, int) or quantity <= 0:
-        return jsonify({"status": False, "error": "quantity phải là số nguyên dương"}), 400
+    if not isinstance(phone_numbers, list) or len(phone_numbers) == 0:
+        return jsonify({"status": False, "error": "phone_numbers phải là mảng không rỗng"}), 400
     if not isinstance(expires_in, int) or expires_in <= 0:
         return jsonify({"status": False, "error": "expires_in phải là số nguyên dương"}), 400
 
     # tránh tạo quá nhiều một lúc
-    if quantity > 1000:
-        return jsonify({"status": False, "error": "quantity tối đa 1000"}), 400
+    if len(phone_numbers) > 1000:
+        return jsonify({"status": False, "error": "phone_numbers tối đa 1000 số"}), 400
+
+    # Validate phone_numbers
+    for phone in phone_numbers:
+        if not isinstance(phone, str) or not phone.strip():
+            return jsonify({"status": False, "error": "phone_numbers phải là mảng các chuỗi không rỗng"}), 400
 
     expires_ts = int((datetime.now(timezone.utc) + timedelta(days=expires_in)).timestamp())
 
     with _lock:
         licenses = _load_licenses()
-        existing = {l.get("code") for l in licenses}
+        existing_codes = {l.get("code") for l in licenses}
+        existing_phones = {l.get("phone_number") for l in licenses if l.get("phone_number")}
 
         created_items = []
-        seen = set()
-        while len(created_items) < quantity:
-            c = _generate_codes(1)[0]
-            if c in existing or c in seen:
+        seen_codes = set()
+        seen_phones = set()
+        
+        for phone in phone_numbers:
+            phone = phone.strip()
+            # Kiểm tra số điện thoại đã tồn tại
+            if phone in existing_phones or phone in seen_phones:
                 continue
-            licenses.append({"code": c, "expired_at": expires_ts})
-            created_items.append({"code": c, "expired_at": expires_ts})
-            seen.add(c)
+            
+            # Tạo code mới, đảm bảo không trùng
+            while True:
+                c = _generate_codes(1)[0]
+                if c not in existing_codes and c not in seen_codes:
+                    break
+            
+            # Lưu license với đầy đủ code, phone_number và expired_at vào danh sách
+            license_item = {"code": c, "phone_number": phone, "expired_at": expires_ts}
+            licenses.append(license_item)
+            created_items.append(license_item)
+            seen_codes.add(c)
+            seen_phones.add(phone)
+        
+        # Lưu toàn bộ danh sách licenses (bao gồm phone_number) vào file license.json
         _save_licenses(licenses)
 
     return jsonify({"status": True, "data": created_items}), 201
@@ -112,13 +133,17 @@ def create_license():
 def verify_license():
     payload = request.get_json(silent=True) or {}
     code = payload.get("code")
+    phone_number = payload.get("phone_number")
+    
     if not code:
         return jsonify({"status": False, "error": "code là bắt buộc"}), 400
+    if not phone_number:
+        return jsonify({"status": False, "error": "phone_number là bắt buộc"}), 400
 
     with _lock:
         licenses = _load_licenses()
 
-    lic = next((l for l in licenses if l.get("code") == code), None)
+    lic = next((l for l in licenses if l.get("code") == code and l.get("phone_number") == phone_number), None)
     if lic is None:
         return jsonify({"status": False, "valid": False, "reason": "not_found"}), 404
 
